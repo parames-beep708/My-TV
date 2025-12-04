@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>T Mm — Program Scheduler (custom slots)</title>
+<style>
+  :root{--bg:#000;--fg:#fff;--muted:#cfcfcf;--card:#111;--accent:#fff}
+  body{margin:0;font-family:Inter,system-ui,Arial;background:var(--bg);color:var(--fg)}
+  .wrap{max-width:1100px;margin:14px auto;padding:14px}
+  header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .brand{display:flex;gap:12px;align-items:center}
+  .logo{width:56px;height:56px;border-radius:8px;border:2px solid var(--muted);display:flex;align-items:center;justify-content:center}
+  h1{margin:0;font-size:18px}
+  .muted{color:var(--muted)}
+  .top{display:flex;gap:8px;align-items:center}
+  .btn{padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--fg);cursor:pointer}
+  .btn.primary{background:var(--fg);color:#000;border:0}
+  .layout{display:grid;grid-template-columns:240px 1fr;gap:12px;margin-top:12px}
+  aside{background:transparent}
+  nav{display:flex;flex-direction:column;gap:8px}
+  nav button{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:var(--fg);cursor:pointer;text-align:left}
+  nav button.active{background:rgba(255,255,255,0.04)}
+  .card{background:var(--card);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .input,select,textarea{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:var(--fg)}
+  .slots-grid{display:grid;grid-template-columns:160px 1fr 280px;gap:10px;align-items:start}
+  .slot-label{padding:10px;font-weight:700}
+  .slot-controls select{width:100%;padding:10px;border-radius:8px;background:#0b0b0b;border:1px solid rgba(255,255,255,0.03);color:var(--fg)}
+  .small{font-size:13px;padding:6px 8px}
+  .ledger{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .ledger-row{display:flex;justify-content:space-between;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+  footer{margin-top:12px;color:var(--muted);font-size:12px}
+  @media (max-width:900px){.layout{grid-template-columns:1fr} aside{order:2}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo">T</div>
+        <div>
+          <h1>T Mm — TV Scheduler (Custom slots)</h1>
+          <div class="muted">Channel hours enforced: 09:00 — 23:00</div>
+        </div>
+      </div>
+
+      <div class="top">
+        <div class="muted">Date:</div>
+        <input id="datePicker" type="date" class="input" />
+        <button id="prevDay" class="btn small">◀</button>
+        <button id="nextDay" class="btn small">▶</button>
+        <div style="width:18px"></div>
+        <div class="muted">Balance:</div>
+        <div id="balance" style="min-width:120px;font-weight:800">$24,000</div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside>
+        <nav id="nav">
+          <button class="active" data-screen="schedule">Program Schedule</button>
+          <button data-screen="ads">Advertisements</button>
+          <button data-screen="market">Buy / Sell</button>
+          <button data-screen="library">Library</button>
+          <button data-screen="ledger">Bank / Ledger</button>
+        </nav>
+
+        <div style="margin-top:10px" class="card">
+          <div class="muted">Simulation</div>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button id="advanceDay" class="btn">Advance Day</button>
+            <button id="collectAds" class="btn">Collect Ads</button>
+          </div>
+        </div>
+      </aside>
+
+      <main>
+        <div id="screen" class="card">
+          <!-- JS renders screens here -->
+        </div>
+      </main>
+    </div>
+
+    <footer>Saved locally (localStorage). Use Advance Day to simulate days.</footer>
+  </div>
+
+<script>
+/* --------------------------
+   State, defaults & helpers
+   -------------------------- */
+const KEY = 'tmm_scheduler_c';
+const HOURS_START = 9, HOURS_END = 23;
+const START_BALANCE = 24000;
+
+// CUSTOM SLOT GROUPS (Option C, can be edited) — these match the style in your image.
+// Each slot covers start -> end (24h HH:MM format). We'll include slots from 09:00 -> 23:00.
+// You can change groups here if you want other ranges.
+const SLOT_GROUPS = [
+  ['09:00','10:00'],
+  ['10:00','11:00'],
+  ['11:00','12:00'],
+  ['12:00','13:00'],
+  ['13:00','14:00'],
+  ['14:00','15:00'],
+  ['15:00','16:00'],
+  ['16:00','17:00'],
+  ['17:00','18:00'],
+  ['18:00','19:00'],
+  ['19:00','20:00'],
+  ['20:00','21:00'],
+  ['21:00','22:00'],
+  ['22:00','23:00']
+];
+
+const defaultState = {
+  balance: START_BALANCE,
+  dateISO: new Date().toISOString().slice(0,10),
+  dayCounter: 1,
+  // market: items available to buy
+  market: {
+    movies: [
+      { id:1, name:'Hero Movie', price:2000, adPerDay:150 },
+      { id:2, name:'Comedy Blast', price:1500, adPerDay:120 },
+      { id:3, name:'Romantic Love', price:1200, adPerDay:90 }
+    ],
+    serials: [],
+    sports: [],
+    gameshows: [],
+    series: []
+  },
+  library: [], // purchased items {id,origId,cat,name,price,adPerDay}
+  ads: [],     // available ads submitted by advertisers: {id,name,amountPerDay,remainingDays}
+  // schedules keyed by dateISO, each is array of objects per slotIndex {programId,adId}
+  schedules: {},
+  ledger: []
+};
+
+function load(){ try{ const r = localStorage.getItem(KEY); if(r) return JSON.parse(r); }catch(e){} return JSON.parse(JSON.stringify(defaultState)); }
+function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+function fmtMoney(n){ return '$' + Number(n).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
+function pad(n){ return String(n).padStart(2,'0'); }
+function toAMPM(hhmm){ const [h,m]=hhmm.split(':').map(Number); const ampm = h>=12?'PM':'AM'; let hh=h%12; if(hh===0) hh=12; return `${hh}:${pad(m)} ${ampm}`; }
+function nextId(arr){ return arr && arr.length ? Math.max(...arr.map(x=>x.id))+1 : 1; }
+
+let state = load();
+
+/* --------------------------
+   Date & top UI
+   -------------------------- */
+const datePicker = document.getElementById('datePicker');
+const balanceEl = document.getElementById('balance');
+function setDateInput(d){ datePicker.value = d; }
+function renderTop(){ balanceEl.textContent = fmtMoney(state.balance); }
+datePicker.addEventListener('change', ()=>{ renderScreen(); });
+
+document.getElementById('prevDay').addEventListener('click', ()=>{
+  const d = new Date(datePicker.value); d.setDate(d.getDate()-1); setDateInput(d.toISOString().slice(0,10)); renderScreen();
+});
+document.getElementById('nextDay').addEventListener('click', ()=>{
+  const d = new Date(datePicker.value); d.setDate(d.getDate()+1); setDateInput(d.toISOString().slice(0,10)); renderScreen();
+});
+
+/* --------------------------
+   Navigation
+   -------------------------- */
+document.querySelectorAll('#nav button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    renderScreen();
+  });
+});
+
+/* --------------------------
+   Screens rendering
+   -------------------------- */
+const screen = document.getElementById('screen');
+
+function renderScreen(){
+  renderTop();
+  const active = document.querySelector('#nav button.active').dataset.screen;
+  if(!datePicker.value) { setDateInput(state.dateISO); }
+  if(active==='schedule') renderScheduleScreen();
+  if(active==='ads') renderAdsScreen();
+  if(active==='market') renderMarketScreen();
+  if(active==='library') renderLibraryScreen();
+  if(active==='ledger') renderLedger();
+}
+
+/* --------------------------
+   SCHEDULE SCREEN
+   -------------------------- */
+function renderScheduleScreen(){
+  const date = datePicker.value;
+  // ensure a schedule array exists for date
+  if(!state.schedules[date]) {
+    // initialize with nulls for each slot
+    state.schedules[date] = SLOT_GROUPS.map(()=>({ programId:null, adId:null }));
+    save();
+  }
+  const scheduleForDate = state.schedules[date];
+
+  // build UI: date row + slots grid (time | programme select | ad select)
+  let html = `<h2>Program schedule — ${date} (${new Date(date).toLocaleDateString(undefined,{weekday:'long'})})</h2>`;
+  html += `<div class="muted" style="margin-bottom:8px">Choose a programme (only purchased items appear) and choose an ad (ads submitted by advertisers)</div>`;
+  html += `<div class="slots-grid">`;
+  html += `<div style="font-weight:800">Time</div><div style="font-weight:800">Programme</div><div style="font-weight:800">Ads</div>`;
+
+  SLOT_GROUPS.forEach((range, idx)=>{
+    const label = `${toAMPM(range[0])} — ${toAMPM(range[1])}`;
+    // programme select will have id prog-{idx}
+    // ad select id ad-{idx}
+    html += `<div class="slot-label">${label}</div>`;
+    html += `<div class="slot-controls"><select id="prog-${idx}"><option value="">-- choose programme --</option></select></div>`;
+    html += `<div class="slot-controls"><select id="ad-${idx}"><option value="">-- choose ad --</option></select></div>`;
+  });
+
+  html += `</div>`;
+  html += `<div style="margin-top:12px"><button id="saveSlots" class="btn primary">Save Schedule for this date</button> <span style="margin-left:12px" class="muted">Schedule is per-date</span></div>`;
+  screen.innerHTML = html;
+
+  // populate programme selects with library items
+  const libraryOptions = state.library.map(it=>({ id:it.id, name:it.name }));
+  SLOT_GROUPS.forEach((_, idx)=>{
+    const progSel = document.getElementById(`prog-${idx}`);
+    libraryOptions.forEach(opt=>{
+      const o = document.createElement('option'); o.value = opt.id; o.textContent = opt.name; progSel.appendChild(o);
+    });
+    // set selected if present in schedule
+    const assigned = scheduleForDate[idx].programId;
+    if(assigned) progSel.value = assigned;
+    // ad select populate
+    const adSel = document.getElementById(`ad-${idx}`);
+    state.ads.forEach(ad=>{
+      const o = document.createElement('option'); o.value = ad.id; o.textContent = `${ad.name} • ${fmtMoney(ad.amountPerDay)}/day • ${ad.remainingDays}d`;
+      adSel.appendChild(o);
+    });
+    const assignedAd = scheduleForDate[idx].adId;
+    if(assignedAd) adSel.value = assignedAd;
+  });
+
+  document.getElementById('saveSlots').addEventListener('click', ()=>{
+    // read selects and write into state.schedules[date]
+    SLOT_GROUPS.forEach((_, idx)=>{
+      const pid = document.getElementById(`prog-${idx}`).value;
+      const aid = document.getElementById(`ad-${idx}`).value;
+      state.schedules[date][idx].programId = pid ? Number(pid) : null;
+      state.schedules[date][idx].adId = aid ? Number(aid) : null;
+    });
+    state.ledger.push({ type:'debit', day:state.dayCounter, date: date, desc:`Saved schedule`, amount:0});
+    save();
+    alert('Schedule saved for ' + date);
+  });
+}
+
+/* --------------------------
+   ADS screen — advertisers submit ads
+   -------------------------- */
+function renderAdsScreen(){
+  let html = `<h2>Advertisements (Advertisers submit ads)</h2>`;
+  html += `<div class="muted">Advertisers can add ad contracts. You assign ads to slots on Program schedule screen.</div>`;
+  html += `<div style="margin-top:10px" class="row"><input id="advName" class="input" placeholder="Advertiser name" style="width:220px" /><input id="advAmt" class="input" type="number" placeholder="Amount per day" style="width:160px" /><input id="advDays" class="input" type="number" placeholder="Contract days" style="width:140px" /><button id="submitAd" class="btn primary">Submit Ad</button></div>`;
+  html += `<div id="adsPool" style="margin-top:12px"></div>`;
+  screen.innerHTML = html;
+
+  function renderPool(){
+    const pool = document.getElementById('adsPool');
+    if(state.ads.length===0) pool.innerHTML = `<div class="muted">No active ads</div>`;
+    else {
+      pool.innerHTML = '';
+      state.ads.forEach((ad,idx)=>{
+        const div = document.createElement('div'); div.className='card';
+        div.innerHTML = `<strong>${ad.name}</strong> • ${fmtMoney(ad.amountPerDay)}/day • ${ad.remainingDays} day(s) left
+                         <div style="margin-top:6px"><button class="btn small collect" data-idx="${idx}">Collect</button> <button class="btn small cancel" data-idx="${idx}">Cancel</button></div>`;
+        pool.appendChild(div);
+      });
+    }
+  }
+  renderPool();
+
+  document.getElementById('submitAd').addEventListener('click', ()=>{
+    const n = document.getElementById('advName').value.trim(); const amt = Number(document.getElementById('advAmt').value)||0; const days = Number(document.getElementById('advDays').value)||2;
+    if(!n || amt<=0){ alert('Enter name and amount'); return; }
+    state.ads.push({ id: nextId(state.ads), name: n, amountPerDay: amt, remainingDays: days });
+    state.ledger.push({ type:'debit', day: state.dayCounter, date: datePicker.value||state.dateISO, desc:`Ad submitted: ${n} (${days}d)`, amount:0 });
+    save(); renderAdsScreen();
+  });
+
+  document.getElementById('adsPool').addEventListener('click', e=>{
+    const idx = e.target.dataset.idx;
+    if(!idx) return;
+    if(e.target.classList.contains('collect')){
+      const ad = state.ads[idx]; state.balance += ad.amountPerDay; state.ledger.push({ type:'credit', day: state.dayCounter, date: datePicker.value||state.dateISO, desc:`Collected ad ${ad.name}`, amount: ad.amountPerDay}); save(); renderTop(); renderAdsScreen();
+    }
+    if(e.target.classList.contains('cancel')){
+      const ad = state.ads.splice(idx,1)[0]; state.ledger.push({ type:'credit', day: state.dayCounter, date: datePicker.value||state.dateISO, desc:`Cancelled ad ${ad.name}`, amount:0}); save(); renderAdsScreen();
+    }
+  });
+}
+
+/* --------------------------
+   MARKET (Buy/Sell)
+   -------------------------- */
+function renderMarketScreen(){
+  let html = `<h2>Buy / Sell (Market)</h2><div class="muted">Buy items → they move to your Library and are removed from Market.</div>`;
+  html += `<div style="margin-top:10px"><strong>Movies</strong></div><div id="marketMovies" style="margin-top:8px"></div>`;
+  screen.innerHTML = html;
+
+  const container = document.getElementById('marketMovies');
+  container.innerHTML = '';
+  (state.market.movies || []).forEach((it, idx)=>{
+    // if already bought (library contains origId), hide
+    const bought = state.library.some(l => l.origId === it.id && l.cat === 'movies');
+    if(bought) return;
+    const d = document.createElement('div'); d.className='card';
+    d.innerHTML = `<div style="font-weight:800">${it.name}</div><div class="muted">Price: ${fmtMoney(it.price)} • Ad ${fmtMoney(it.adPerDay)}/day</div><div style="margin-top:8px"><button class="btn small buyMovie" data-id="${it.id}" data-idx="${idx}">Buy</button></div>`;
+    container.appendChild(d);
+  });
+
+  container.addEventListener('click', e=>{
+    if(e.target.classList.contains('buyMovie')){
+      const id = Number(e.target.dataset.id);
+      const item = state.market.movies.find(x=>x.id===id);
+      if(!item) return;
+      if(state.balance < item.price) return alert('Not enough balance');
+      state.balance -= item.price;
+      state.library.push({ id: nextId(state.library), origId: item.id, cat: 'movies', name: item.name, price: item.price, adPerDay: item.adPerDay });
+      state.ledger.push({ type:'debit', day: state.dayCounter, date: datePicker.value||state.dateISO, desc:`Bought ${item.name}`, amount: item.price });
+      save(); renderTop(); renderMarketScreen();
+      alert('Purchased ' + item.name + ' — moved to Library');
+    }
+  });
+}
+
+/* --------------------------
+   LIBRARY screen
+   -------------------------- */
+function renderLibraryScreen(){
+  let html = `<h2>Library</h2><div class="muted">Your purchased items. Schedule them on the Program schedule.</div>`;
+  html += `<div style="margin-top:10px" id="libGrid"></div>`;
+  screen.innerHTML = html;
+  const libGrid = document.getElementById('libGrid'); libGrid.innerHTML = '';
+  if(state.library.length === 0) libGrid.innerHTML = `<div class="muted">No items in library</div>`;
+  else state.library.forEach(it=>{
+    const d = document.createElement('div'); d.className='card';
+    d.innerHTML = `<div style="font-weight:800">${it.name}</div><div class="muted">Category: ${it.cat} • Ad ${fmtMoney(it.adPerDay)}/day</div><div style="margin-top:6px"><button class="btn small sellLib" data-id="${it.id}">Sell</button></div>`;
+    libGrid.appendChild(d);
+  });
+
+  libGrid.addEventListener('click', e=>{
+    if(e.target.classList.contains('sellLib')){
+      const id = Number(e.target.dataset.id);
+      const idx = state.library.findIndex(x=>x.id===id);
+      if(idx>=0){
+        const it = state.library.splice(idx,1)[0];
+        const sellAmt = Math.round(it.price * 0.4);
+        state.balance += sellAmt;
+        state.ledger.push({ type:'credit', day: state.dayCounter, date: datePicker.value||state.dateISO, desc:`Sold ${it.name}`, amount: sellAmt });
+        save(); renderTop(); renderLibraryScreen();
+      }
+    }
+  });
+}
+
+/* --------------------------
+   Ledger
+   -------------------------- */
+function renderLedger(){
+  let html = `<h2>Bank & Ledger</h2><div class="muted">Transactions (credits/debits)</div><div class="ledger" id="ledgerList" style="margin-top:10px"></div>`;
+  screen.innerHTML = html;
+  const list = document.getElementById('ledgerList');
+  const rows = state.ledger.slice().reverse();
+  if(rows.length===0) list.innerHTML = `<div class="muted">No transactions yet</div>`;
+  else rows.forEach(r=>{
+    const d = document.createElement('div'); d.className='ledger-row';
+    d.innerHTML = `<div><strong>${r.desc}</strong><div class="muted" style="font-size:12px">Day ${r.day} • ${r.date}</div></div><div style="font-weight:800;color:${r.type==='credit'?'#b8f1b3':'#ffb3b3'}">${r.type==='credit'?'+':''}${fmtMoney(r.amount)}</div>`;
+    list.appendChild(d);
+  });
+}
+
+/* --------------------------
+   Simulation: Advance Day
+   -------------------------- */
+function advanceDay(){
+  const date = datePicker.value || state.dateISO;
+  // collect program income (sum of adPerDay for scheduled programmes) + assigned ads (amountPerDay)
+  let progIncome = 0;
+  const sched = state.schedules[date] || [];
+  sched.forEach(slot=>{
+    if(slot && slot.programId){
+      const prog = state.library.find(l=>l.id === Number(slot.programId));
+      if(prog) progIncome += (prog.adPerDay || 0);
+    }
+    if(slot && slot.adId){
+      const ad = state.ads.find(a=>a.id === Number(slot.adId));
+      if(ad) progIncome += (ad.amountPerDay || 0);
+    }
+  });
+  // ads: decrement remainingDays and remove expired
+  const expired = [];
+  state.ads.forEach(ad => ad.remainingDays -= 1);
+  while(true){
+    const idx = state.ads.findIndex(a => a.remainingDays <= 0);
+    if(idx===-1) break;
+    expired.push(state.ads[idx].name);
+    state.ads.splice(idx,1);
+  }
+  // apply income
+  state.balance += progIncome;
+  state.ledger.push({ type:'credit', day: state.dayCounter, date: date, desc: 'Daily income (schedule+ads)', amount: progIncome });
+  if(expired.length) state.ledger.push({ type:'credit', day: state.dayCounter, date: date, desc: `Ads expired: ${expired.join(', ')}`, amount:0 });
+  // advance date
+  state.dayCounter += 1;
+  const d = new Date(date); d.setDate(d.getDate()+1);
+  datePicker.value = d.toISOString().slice(0,10);
+  save(); renderTop(); renderScreen();
+  alert('Advanced 1 day — collected ' + fmtMoney(progIncome) + (expired.length ? '\\nExpired ads: ' + expired.join(', ') : ''));
+}
+document.getElementById('advanceDay').addEventListener('click', advanceDay);
+
+function collectAllAds(){
+  let total = 0;
+  state.ads.forEach(ad => { total += ad.amountPerDay; state.ledger.push({ type:'credit', day: state.dayCounter, date: datePicker.value||state.dateISO, desc:`Collected ad ${ad.name}`, amount: ad.amountPerDay }); });
+  state.balance += total; save(); renderTop(); alert('Collected ad money: '+fmtMoney(total));
+}
+document.getElementById('collectAds').addEventListener('click', collectAllAds);
+
+/* --------------------------
+   Init / boot
+   -------------------------- */
+if(!state.dateISO) state.dateISO = new Date().toISOString().slice(0,10);
+datePicker.value = state.dateISO;
+renderScreen();
+save(); // seed storage
+
+</script>
+</body>
+</html>
